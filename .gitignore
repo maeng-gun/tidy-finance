@@ -1,0 +1,12 @@
+/data/tidy_finance.sqlite
+/.idea/.gitignore
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/rAvailablePackageCache.xml
+/.idea/rGraphicsSettings.xml
+/.idea/rSettings.xml
+/.idea/tidy-finance.iml
+/.idea/vcs.xml
+.Rproj.user
+.Rhistory
+id_pw.yaml

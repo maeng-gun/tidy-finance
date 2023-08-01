@@ -1,0 +1,225 @@
+---
+title: "tidy-portfolio"
+format: html
+editor: visual
+---
+
+## 1. Time-series in R
+
+### 1) 패키지 로드
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidyquant)
+library(broom)
+library(timeDate)
+library(timetk)
+```
+
+### 2) xts 사용하기
+
+#### - 기본사용
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1)
+data <- rnorm(3)
+dates <- seq(as.Date("2020-05-01"), length=3, by='days')
+xts1 <- xts(x=data, order.by=dates)
+xts1
+```
+
+#### - merge
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1)
+xts3 <- xts(
+  rnorm(3), 
+  timeSequence(from = "2020-01-01", 
+               to = "2020-03-01", 
+               by="month"))
+xts4 <- xts(
+  rnorm(3), 
+  timeSequence(from = "2020-02-01", 
+               to = "2020-04-01", 
+               by="month"))
+colnames(xts3) <- "tsA"; colnames(xts4) <- "tsB"
+merge(xts3,xts4)
+```
+
+#### - tibble -\> xts
+
+```{r}
+FANG_xts <- FANG %>% 
+  select(date,symbol,adjusted) %>% 
+  pivot_wider(names_from = 'symbol',
+              values_from = 'adjusted') %>% 
+  tk_xts(silent=T)
+FANG_xts
+```
+
+#### - xts -\> tibble
+
+```{r}
+FANG2 <- FANG_xts %>% 
+  tk_tbl() %>% 
+  pivot_longer(cols=2:5, 
+               names_to='symbol',
+               values_to = 'adjusted') %>% 
+  select(symbol, date=index, adjusted) %>% 
+  arrange(symbol, date)
+FANG2
+```
+
+### 3) 회귀분석
+
+#### - FANG 주가수익률 시계열
+
+```{r}
+data(FANG)
+FANG_ret <- 
+  FANG %>% group_by(symbol) %>%     
+  select(symbol,date,adjusted) %>%
+  arrange(date) %>%
+  filter(date>"2016-06-30") %>%
+  mutate(return=adjusted/lag(adjusted)-1) %>% 
+  drop_na(return)
+
+FANG_ret2 <-
+  FANG_ret %>% ungroup() %>%
+  left_join(
+    FANG_ret %>% 
+      group_by(date) %>% 
+      summarise(index=mean(return)),
+    by="date") %>%
+  select(symbol,date,return,index)
+
+
+FANG_ret2
+```
+
+#### - 종목별 중첩테이블 및 회귀분석 결과 생성
+
+```{r}
+FANG_ret2n <- FANG_ret2 %>% 
+  nest_by(symbol)
+
+FANG_reg <- FANG_ret2n %>% 
+  mutate(model = list(lm(return ~ index, data)))
+
+FANG_reg
+```
+
+#### - tidy(lm_object) : 회귀계수, t값, p값 등 tibble
+
+```{r}
+FANG_reg %>% reframe(tidy(model))
+```
+
+#### - glance(lm_object) : R 스퀘어, F통계량 등 tibble
+
+```{r}
+FANG_reg %>% reframe(glance(model))
+```
+
+#### - coef(lm_object) : 회귀계수 named vector
+
+-   bind_rows : n vector -\> tibble(1xn)
+
+```{r}
+FANG_reg %>% 
+  reframe(bind_rows(coef(model)))
+```
+
+#### - confint(lm_object) : 회귀계수의 신뢰구간 matrix
+
+-   as_tibble : matrix -\> tibble
+
+```{r}
+FANG_reg %>% reframe(
+  as_tibble(confint(model), 
+            rownames = "coef"
+  ))
+```
+
+#### - sandwich : 분산-공분산 행렬에 대한 robust estimator 중 하나이며, 패키지명
+
+-   vcovHC :Heteroscedasticity-Consistent Covariance Matrix Estimation 함수
+
+-   NeweyWest : Newey and West(1987) HAC 분산공분산 추정량
+
+#### - lmtest : 회귀분석 결과에 대한 검정용 패키지
+
+-   coeftest : 오차의 자기상관 / 이분산성 존재시 이를 보정한 검정 수행 함수
+
+```{r}
+library(sandwich)
+library(lmtest)
+
+FANG_reg %>% 
+  reframe(
+    tidy(
+      coeftest(
+        model,
+        vcov. = vcovHC(model, type="HC1")
+      )))
+```
+
+#### - NeweyWest : Newey and West(1987) HAC 분산공분산 추정량
+
+```{r}
+FANG_reg %>% 
+  reframe(
+    tidy(
+      coeftest(
+        model,
+        vcov. = NeweyWest(model)
+      )))
+```
+
+### 4) 시각화
+
+#### - 수정주가 그래프(line plot)
+
+```{r}
+FANG %>% 
+  ggplot(aes(x=date, 
+             y=adjusted,
+             color=symbol))+
+  geom_line()
+```
+
+#### - 종목별 분포 및 극단치 확인(box plot)
+
+```{r}
+FANG_ret %>% 
+  ggplot(aes(symbol, return))+
+  geom_boxplot(aes(color=symbol))+
+  labs(x='symbols', y='returns')
+```
+
+#### - 수익률 분포 (histogram, density plot)
+
+```{r}
+FANG_ret %>% 
+  ggplot(aes(return)) +
+  geom_histogram(
+    aes(y=after_stat(density)),
+    bins = 30) +
+  geom_density(lwd=1) +
+  facet_wrap(~symbol)
+```
+
+#### - 종목별 수익률 상관관계(ggpairs)
+
+```{r message=FALSE, warning=FALSE}
+library(GGally)
+
+FANG_ret %>% ungroup() %>% 
+  select(date,return,symbol) %>% 
+  pivot_wider(
+    id_cols = date,
+    names_from = "symbol",
+    values_from = "return") %>% 
+  select(-date) %>%
+  ggpairs()
+```
